@@ -1,0 +1,10 @@
+{
+  "event_name": "Python Workshop 2026",
+  "issued_by": "VIT Bhopal Tech Club",
+  "issue_date": "2026-10-01",
+  "recipients": [
+    {"name": "Riya Shukla", "email": "riya@example.com"},
+    {"name": "Aman Verma", "email": "aman@example.com", "achievement": "for winning 1st prize in"},
+    {"name": "", "email": "invalid-email"}
+  ]
+}
