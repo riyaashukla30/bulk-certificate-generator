@@ -1,132 +1,190 @@
 # Bulk Certificate Generator
 
-Backend API jo ek request mein recipients ki list leta hai, har valid recipient ke liye PDF certificate
-generate karta hai (ek predefined template se), progress track karta hai, aur certificates download karne deta hai.
+A backend API that accepts a certificate generation request for a list of recipients, validates the data,
+generates a certificate (PDF) for each valid recipient using a single predefined template, tracks the status
+of the job, and lets the client retrieve the generated certificates.
 
-**Stack:** Python 3.10+, FastAPI, SQLAlchemy (SQLite by default), ReportLab, pytest
+**Technology:** Python 3.10+, FastAPI, SQLAlchemy with SQLite (relational database), ReportLab (PDF generation), pytest.
 
-## 1. Setup
+---
+
+## How to set up the project
+
 ```bash
+git clone https://github.com/riyaashukla30/bulk-certificate-generator.git
+cd bulk-certificate-generator
+
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source venv/bin/activate          # Windows (PowerShell): venv\Scripts\Activate.ps1
+                                  # Windows (CMD):        venv\Scripts\activate
+
 pip install -r requirements.txt
 ```
 
-## 2. Run
+No separate database setup is needed; the tables are created automatically on the first start.
+
+Optional environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./certificates.db` | Any SQLAlchemy database URL (for example PostgreSQL) |
+| `OUTPUT_DIR` | `generated` | Folder where the generated PDF files are stored |
+
+---
+
+## How to run the application
+
 ```bash
 uvicorn app.main:app --reload
 ```
-- API: http://127.0.0.1:8000
-- Interactive docs (Swagger): http://127.0.0.1:8000/docs
 
-Optional environment variables:
-| Variable | Default | Meaning |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///./certificates.db` | Any SQLAlchemy URL (e.g. PostgreSQL) |
-| `OUTPUT_DIR` | `generated` | PDF files yahan save hote hain |
+- API base URL: `http://127.0.0.1:8000`
+- Interactive API documentation (Swagger UI): `http://127.0.0.1:8000/docs`
 
-## 3. Run tests
+---
+
+## How to run tests
+
 ```bash
 pytest -v
 ```
 
-## 4. Submit a generation request
+The tests use a temporary database and a temporary output folder, so they do not touch real data.
+They cover: creating a generation job, input validation, certificate generation, job status/progress,
+handling of an individual certificate failure, and retrieving generated certificates.
+
+---
+
+## How to submit a certificate generation request
+
+**Endpoint:** `POST /jobs`
+
 ```bash
 curl -X POST http://127.0.0.1:8000/jobs \
   -H "Content-Type: application/json" \
   -d @sample_request.json
 ```
-Response (`202 Accepted`):
+
+(On Windows PowerShell use `curl.exe` instead of `curl`.)
+
+Example request body (`sample_request.json`):
+
 ```json
 {
-  "job_id": "3f2c...",
-  "status": "processing",
   "event_name": "Python Workshop 2026",
-  "total": 3, "succeeded": 0, "failed": 1, "pending": 2,
-  "certificates_url": "/jobs/3f2c.../certificates",
-  "download_all_url": "/jobs/3f2c.../download"
+  "issued_by": "VIT Bhopal Tech Club",
+  "issue_date": "2026-10-01",
+  "recipients": [
+    {"name": "Riya Shukla", "email": "riya@example.com"},
+    {"name": "Aman Verma", "email": "aman@example.com", "achievement": "for winning 1st prize in"},
+    {"name": "", "email": "invalid-email"}
+  ]
 }
 ```
 
-**Request fields**
 | Field | Rules |
 |---|---|
-| `event_name` | required, 1-200 chars |
-| `issued_by` | required, 1-100 chars |
-| `issue_date` | required, `YYYY-MM-DD` |
+| `event_name` | required, 1-200 characters |
+| `issued_by` | required, 1-100 characters |
+| `issue_date` | required, format `YYYY-MM-DD` |
 | `recipients` | required, 1 to 1000 items |
-| `recipients[].name` | required, 1-100 chars |
+| `recipients[].name` | required, 1-100 characters |
 | `recipients[].email` | required, valid email format |
 | `recipients[].achievement` | optional text printed on the certificate (default: "for successful participation in") |
 
-## 5. Check progress
+The API replies immediately with `202 Accepted` and a `job_id`. The certificates are generated in the background.
+
+```json
+{
+  "job_id": "3f2c9a1e-...",
+  "status": "pending",
+  "event_name": "Python Workshop 2026",
+  "total": 3,
+  "succeeded": 0,
+  "failed": 1,
+  "pending": 2,
+  "certificates_url": "/jobs/3f2c9a1e-.../certificates",
+  "download_all_url": "/jobs/3f2c9a1e-.../download"
+}
+```
+
+**Checking the progress / result of the request**
+
 ```bash
+# overall status and counts
 curl http://127.0.0.1:8000/jobs/<job_id>
-```
-Job status values: `pending`, `processing`, `completed`, `completed_with_errors`, `failed`.
-Response mein `total`, `succeeded`, `failed`, `pending` counts milte hain.
 
-List certificates (per-recipient status + error reason), with filter and pagination:
+# status of every certificate (supports ?status=success|failed|pending, ?limit=, ?offset=)
+curl "http://127.0.0.1:8000/jobs/<job_id>/certificates"
+curl "http://127.0.0.1:8000/jobs/<job_id>/certificates?status=failed"
+```
+
+- Job status values: `pending`, `processing`, `completed`, `completed_with_errors`, `failed`.
+- Certificate status values: `pending`, `success`, `failed`.
+- A failed certificate carries an `error` message, for example
+  `Validation error: name must not be empty; email has an invalid format`.
+
+---
+
+## How to retrieve generated certificates
+
 ```bash
-curl "http://127.0.0.1:8000/jobs/<job_id>/certificates?status=failed&limit=50&offset=0"
+# a single certificate (PDF); the URL is the "download_url" field in the certificates list
+curl -o certificate.pdf http://127.0.0.1:8000/certificates/<certificate_id>/download
+
+# all successful certificates of a job as one ZIP file
+curl -o certificates.zip http://127.0.0.1:8000/jobs/<job_id>/download
 ```
 
-## 6. Retrieve certificates
-```bash
-# ek certificate (PDF)
-curl -o cert.pdf http://127.0.0.1:8000/certificates/<certificate_id>/download
+- Downloading a failed or not-yet-generated certificate returns `409 Conflict`.
+- The ZIP endpoint returns `409` while the job is still being processed, and `404` if the job has no successful certificates.
+- An unknown job or certificate ID returns `404`.
 
-# poore job ke saare successful certificates (ZIP)
-curl -o certs.zip http://127.0.0.1:8000/jobs/<job_id>/download
-```
-- Failed certificate download karne par `409` milta hai.
-- Job abhi chal raha ho to ZIP endpoint `409` deta hai ("try again later").
+---
 
-## API summary
-| Method | Endpoint | Purpose |
-|---|---|---|
-| POST | `/jobs` | Bulk job create (202) |
-| GET | `/jobs/{job_id}` | Job status + counts |
-| GET | `/jobs/{job_id}/certificates` | Per-certificate status/errors (filter + pagination) |
-| GET | `/certificates/{id}/download` | Single PDF |
-| GET | `/jobs/{job_id}/download` | ZIP of all successful PDFs |
+## Important implementation/design decisions
 
-## Design decisions
+**Bulk processing: background processing instead of synchronous processing.**
+One request can contain up to 1000 recipients, and generating that many PDFs inside the request could take long
+and hit HTTP timeouts. Therefore `POST /jobs` saves the job, returns `202 Accepted` immediately, and the PDFs are
+generated in the background using FastAPI `BackgroundTasks`. The client polls `GET /jobs/{job_id}` to see the progress.
+Trade-off: background tasks run inside the server process, so a server restart can interrupt a running job.
+For production, a task queue such as Celery or RQ with Redis would be the next step; it was not used here to keep the
+setup simple and free of extra infrastructure. Bulk generation is supported in one request, so the client never has
+to make one API call per certificate.
 
-**1. Background processing (not synchronous).**
-Ek request mein 1000 recipients ho sakte hain. Agar sab kuch request ke andar karte, to client ko lamba wait
-karna padta aur HTTP timeout ka risk hota. Isliye `POST /jobs` job save karke turant `202` return karta hai
-aur PDFs FastAPI `BackgroundTasks` se background mein banti hain. Client `GET /jobs/{id}` se progress poll karta hai.
-*Trade-off:* BackgroundTasks server process ke andar chalte hain, to server restart hone par pending job ruk sakta hai.
-Production mein Celery/RQ + Redis use karna chahiye (neeche "Future improvements").
-Is assignment ke scope ke liye BackgroundTasks simple hai aur extra infrastructure nahi chahiye.
+**Validation (two levels).**
+- Request level: a missing or invalid `event_name`, `issued_by` or `issue_date`, or an empty / oversized recipient list,
+  rejects the whole request with `422`.
+- Recipient level: every recipient is validated individually. An invalid recipient does not reject the request;
+  it is stored as a `failed` certificate with a clear error message, and all valid recipients are still processed.
 
-**2. Two-level validation.**
-- *Request level* (Pydantic): `event_name`, `issue_date`, empty/too-large recipient list -> poori request `422` se reject.
-- *Recipient level*: har recipient alag validate hota hai. Galat recipient poori request ko reject nahi karta;
-  uska certificate row `failed` + error message ke saath save hota hai, baaki valid recipients process hote hain.
+**Failure handling.**
+Each certificate is generated inside its own `try/except` and committed to the database right after it is processed.
+A failure in one certificate never stops the others, and the progress is visible while the job is running.
+The final job status is `completed` when all certificates succeeded, `completed_with_errors` when some failed, and
+`failed` when all failed. The job status and the per-certificate list identify exactly which generations succeeded and which failed.
 
-**3. Failure isolation.**
-Har certificate apne `try/except` mein generate hota hai aur har certificate ke baad DB commit hota hai.
-Ek fail hone se baaki nahi rukte, aur progress live dikhta hai. Final job status:
-sab success -> `completed`; kuch fail -> `completed_with_errors`; sab fail -> `failed`.
+**Certificate template.**
+A single predefined landscape A4 template drawn with ReportLab (border, title, recipient name, achievement text,
+event name, date and issuer). There is no template editor and no support for multiple designs, as per the requirements.
 
-**4. Database schema.**
-`jobs` (1) -> `certificates` (many). Certificate row mein recipient data, status, file path, error store hota hai.
-`certificates.job_id` par index hai. Job counts hamesha certificates se compute hote hain, to counts aur
-status kabhi out-of-sync nahi hote.
+**Database design.**
+Two tables: `jobs` (one) and `certificates` (many). A certificate row stores the recipient data, its position in the
+request, its status, the file path and the error message. `certificates.job_id` is indexed. Job counts are always
+computed from the certificate rows, so the counts and the job status cannot get out of sync.
 
-**5. Storage.**
-PDFs disk par `generated/<job_id>/<certificate_id>.pdf` mein save hoti hain, DB mein sirf path.
+**File storage.**
+PDFs are saved on disk at `generated/<job_id>/<certificate_id>.pdf`; the database stores only the file path.
 
-**6. Pagination.**
-Certificates list `limit` (max 500) aur `offset` support karti hai, kyunki job bahut bada ho sakta hai.
+**Listing and pagination.**
+The certificates list supports `limit` (maximum 500), `offset` and a `status` filter, because a job can be large.
+Items are returned in the same order in which the recipients were submitted.
 
-**7. Testability.**
-`create_app(db_url, output_dir)` factory se tests har baar alag temp DB use karte hain.
+**Testability.**
+The application is created through a `create_app(db_url, output_dir)` factory, so every test gets its own temporary
+database and output folder.
 
-## Known limitations / future improvements
-- Celery/RQ + Redis for durable, restart-safe, parallel processing.
-- Standard Helvetica font use hota hai; Hindi jaise non-Latin names ke liye Unicode TTF font register karna padega.
-- Authentication aur duplicate-recipient detection nahi hai.
-- Email se certificates bhejna (recipient ka email already stored hai) future feature ho sakta hai.
+**Known limitations.**
+The built-in Helvetica font is used, so non-Latin names (for example Hindi) would need a Unicode TTF font to be registered.
+There is no authentication and no duplicate-recipient detection.
